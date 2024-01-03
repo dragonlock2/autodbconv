@@ -1,8 +1,15 @@
 [package]
 name = "autodbconv"
+default-run = "autodbconv"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[[bin]]
+name = "autodbconv"
+path = "src/bin/autodbconv.rs"
+
+[[bin]]
+name = "ncf2ldf"
+path = "src/bin/ncf2ldf.rs"
 
 [dependencies]

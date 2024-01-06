@@ -35,6 +35,7 @@ struct Signal {
 
 struct Message {
     sender: String,
+    id: u32,
     byte_width: u16,
     signals: Vec<String>,
     mux_signals: HashMap<String, (u64, Vec<String>)>,
@@ -54,7 +55,7 @@ enum DatabaseType {
     },
 }
 
-struct Database {
+pub struct Database {
     signals: HashMap<String, Signal>,
     messages: HashMap<String, Message>,
     extra: DatabaseType,

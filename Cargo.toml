@@ -13,3 +13,5 @@ name = "ncf2ldf"
 path = "src/bin/ncf2ldf.rs"
 
 [dependencies]
+env_logger = "0.10"
+log = "0.4"

@@ -41,18 +41,18 @@ struct Message {
     mux_signals: HashMap<String, (u64, Vec<String>)>,
 }
 
+#[derive(Debug)]
+pub struct LDFData {
+    pub bitrate: f64, // bps
+    pub postfix: String,
+    // TODO schedule tables
+    // TODO NADs?
+}
+
 enum DatabaseType {
-    NCF {
-        // TODO similar to LDF
-    },
-    LDF {
-        bus_speed: u32,
-        // TODO schedule tables
-        // TODO NADs?
-    },
-    DBC {
-        bus_speed: u32,
-    },
+    NCF,
+    LDF(LDFData),
+    DBC,
 }
 
 pub struct Database {

@@ -5,6 +5,7 @@ pub enum Error {
     ExpectedToken,
     IncorrectToken,
     NumberParse,
+    UnknownNode,
     NotImplemented,
 }
 
@@ -16,6 +17,12 @@ impl From<std::io::Error> for Error {
 
 impl From<std::num::ParseFloatError> for Error {
     fn from(_: std::num::ParseFloatError) -> Self {
+        Error::NumberParse
+    }
+}
+
+impl From<std::num::ParseIntError> for Error {
+    fn from(_: std::num::ParseIntError) -> Self {
         Error::NumberParse
     }
 }

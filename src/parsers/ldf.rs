@@ -4,6 +4,7 @@ use log::{error, warn};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use std::str::FromStr;
 
 const LIN_VERSION_STR: &str = "\"2.2\"";
 
@@ -156,6 +157,26 @@ enum ParserState {
     Done,
 }
 
+fn parse_real_or_integer(s: &str) -> Result<f64, <f64 as FromStr>::Err> {
+    if s.starts_with("0x") {
+        if let Ok(i) = u64::from_str_radix(&s[2..], 16) {
+            Ok(i as f64)
+        } else {
+            "z".parse() // create ParseFloatError
+        }
+    } else {
+        s.parse()
+    }
+}
+
+fn parse_integer(s: &str) -> Result<u64, <u64 as FromStr>::Err> {
+    if s.starts_with("0x") {
+        u64::from_str_radix(&s[2..], 16)
+    } else {
+        s.parse()
+    }
+}
+
 pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
     let mut tokens = Tokenizer::new(ldf)?;
     let mut state = ParserState::Header;
@@ -186,7 +207,7 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
             }
             ParserState::Speed => {
                 tokens.check_equal(&["LIN_speed", "="])?;
-                data.bitrate = tokens.next()?.parse()?;
+                data.bitrate = parse_real_or_integer(tokens.next()?)?;
                 data.bitrate *= 1000.0;
                 tokens.check_equal(&["kbps", ";"])?;
                 if tokens.peek()? == "Channel_name" {
@@ -205,9 +226,9 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
                 tokens.check_equal(&["Nodes", "{", "Master", ":"])?;
                 data.commander = tokens.next()?.to_string();
                 tokens.check_equal(&[","])?;
-                data.time_base = tokens.next()?.parse()?;
+                data.time_base = parse_real_or_integer(tokens.next()?)?;
                 tokens.check_equal(&["ms", ","])?;
-                data.jitter = tokens.next()?.parse()?;
+                data.jitter = parse_real_or_integer(tokens.next()?)?;
                 tokens.check_equal(&["ms", ";", "Slaves", ":"])?;
                 loop {
                     data.responders
@@ -244,15 +265,15 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
                 while tokens.peek()? != "}" {
                     let name = tokens.next()?.to_string();
                     tokens.check_equal(&[":"])?;
-                    let bit_width: u16 = tokens.next()?.parse()?;
+                    let bit_width = parse_integer(tokens.next()?)? as u16;
                     tokens.check_equal(&[","])?;
-                    let init_value: u64;
+                    let init_value;
                     if tokens.peek()? == "{" {
                         warn!("init_value_array not supported yet, defaulting to 0"); // TODO support?
                         init_value = 0;
                         while tokens.next()? != "}" {}
                     } else {
-                        init_value = tokens.next()?.parse()?
+                        init_value = parse_integer(tokens.next()?)?;
                     }
                     tokens.check_equal(&[","])?;
                     let _publisher = tokens.next()?; // unused, determined by Frames field

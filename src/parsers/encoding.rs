@@ -3,7 +3,7 @@ use std::collections::HashMap;
 pub const MAX_SIGNAL_WIDTH: u16 = 64;
 pub const BIT_START_INVALID: u16 = u16::MAX;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Encoding {
     Scalar {
         raw_min: u64,
@@ -33,7 +33,7 @@ pub struct Signal {
     pub bit_start: u16,
     pub bit_width: u16,
     pub init_value: u64,
-    pub encodings: Vec<Encoding>,
+    pub encodings: Option<Vec<Encoding>>,
 }
 
 #[derive(Debug)]

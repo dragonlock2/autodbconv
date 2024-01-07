@@ -314,7 +314,7 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
                             bit_start: BIT_START_INVALID, // set later
                             bit_width,
                             init_value,
-                            encodings: Vec::new(),
+                            encodings: None,
                         },
                     );
                 }
@@ -833,7 +833,30 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
                 }
             }
             ParserState::SignalRepresentation => {
-                error!("TODO signal representation"); // TODO parse
+                tokens.check_equal(&["Signal_representation", "{"])?;
+                while tokens.peek()? != "}" {
+                    let name = tokens.next()?.to_string();
+                    if !encodings.contains_key(&name) {
+                        return Err(Error::UnknownEncoding);
+                    }
+                    tokens.check_equal(&[":"])?;
+                    loop {
+                        let signal = tokens.next()?;
+                        if !db.signals.contains_key(signal) {
+                            return Err(Error::UnknownSignal);
+                        } else if let Some(_) = db.signals[signal].encodings {
+                            return Err(Error::DuplicateEncoding);
+                        }
+                        db.signals.get_mut(signal).unwrap().encodings =
+                            Some(encodings[&name].clone());
+                        match tokens.next()? {
+                            "," => (),
+                            ";" => break,
+                            _ => return Err(Error::IncorrectToken),
+                        }
+                    }
+                }
+                tokens.next()?; // "}"
                 if tokens.peek().is_ok() {
                     return Err(Error::UnexpectedToken);
                 }

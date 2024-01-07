@@ -10,6 +10,7 @@ pub enum Error {
     UnknownNode,
     UnknownFrame,
     UnknownSignal,
+    UnknownEncoding,
     DuplicateSignal,
     DuplicateFrame,
     DuplicateEncoding,

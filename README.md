@@ -6,7 +6,7 @@ Easy to use Rust library for parsing and generating code from automotive databas
 
 ## TODO
 
-- parser for NCF/LDF/DBC
+- parser for NCF/DBC
 - generator for native Rust => bind to Dart/Flutter
 - generator for Python
 - generator for Zephyr C++

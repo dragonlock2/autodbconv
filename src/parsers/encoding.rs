@@ -46,17 +46,26 @@ pub struct Message {
 }
 
 #[derive(Debug, Default)]
+pub struct LINResponderData {
+    pub subscribed_signals: Vec<String>,
+    pub configured_nad: u8,
+    pub initial_nad: Option<u8>,
+    pub product_id: Option<(u16, u16, u8)>, // supplier, function, variant
+    pub response_error: Option<String>,
+    pub configurable_frames: Vec<(String, Option<u16>)>,
+}
+
+#[derive(Debug, Default)]
 pub struct LDFData {
     pub bitrate: f64, // bps
     pub postfix: String,
     pub commander: String,
-    pub time_base: f64,                           // ms
-    pub jitter: f64,                              // ms
-    pub responders: HashMap<String, Vec<String>>, // node => subscribed signals
+    pub time_base: f64, // ms
+    pub jitter: f64,    // ms
+    pub responders: HashMap<String, LINResponderData>,
     pub sporadic_frames: HashMap<String, Vec<String>>,
     pub event_frames: HashMap<String, (String, u32, Vec<String>)>, // collision resolver, id, list of frames
                                                                    // TODO schedule tables
-                                                                   // TODO NADs?
 }
 
 #[derive(Debug)]

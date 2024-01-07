@@ -1,4 +1,6 @@
-use crate::parsers::encoding::{DatabaseType, LDFData, Message, Signal, BIT_START_INVALID};
+use crate::parsers::encoding::{
+    DatabaseType, LDFData, Message, Signal, BIT_START_INVALID, MAX_SIGNAL_WIDTH,
+};
 use crate::{Database, Error};
 use log::{error, warn};
 use std::collections::HashMap;
@@ -159,6 +161,7 @@ enum ParserState {
     EventTriggeredFrame,
     DiagnosticFrame,
     NodeAttributes,
+    ScheduleTable,
     Done,
 }
 
@@ -238,7 +241,7 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
                 tokens.check_equal(&["ms", ";", "Slaves", ":"])?;
                 loop {
                     data.responders
-                        .insert(tokens.next()?.to_string(), Vec::new());
+                        .insert(tokens.next()?.to_string(), Default::default());
                     let delim = tokens.next()?;
                     if delim == ";" {
                         break;
@@ -272,6 +275,9 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
                     let name = tokens.next()?.to_string();
                     tokens.check_equal(&[":"])?;
                     let bit_width = parse_integer(tokens.next()?)? as u16;
+                    if bit_width > MAX_SIGNAL_WIDTH {
+                        return Err(Error::SignalTooWide);
+                    }
                     tokens.check_equal(&[","])?;
                     let init_value;
                     if tokens.peek()? == "{" {
@@ -290,6 +296,7 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
                             data.responders
                                 .get_mut(subscriber)
                                 .unwrap()
+                                .subscribed_signals
                                 .push(name.clone());
                         }
                     }
@@ -395,7 +402,7 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
                         tokens.check_equal(&[","])?;
                         let f = tokens.next()?.to_string();
                         if !db.messages.contains_key(&f) {
-                            return Err(Error::SporadicUnknownFrame);
+                            return Err(Error::UnknownFrame);
                         } else if db.messages[&f].sender != data.commander {
                             return Err(Error::SporadicFrameHasResponder);
                         } else if frames.contains(&f) {
@@ -491,6 +498,83 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
                 state = ParserState::NodeAttributes;
             }
             ParserState::NodeAttributes => {
+                tokens.check_equal(&["Node_attributes", "{"])?;
+                while tokens.peek()? != "}" {
+                    let name = tokens.next()?.to_string();
+                    if !data.responders.contains_key(&name) {
+                        return Err(Error::UnknownNode);
+                    }
+                    let resp = data.responders.get_mut(&name).unwrap();
+                    tokens.check_equal(&["{", "LIN_protocol", "="])?;
+                    let protocol = tokens.next()?.to_string();
+                    tokens.check_equal(&[";", "configured_NAD", "="])?;
+                    resp.configured_nad = parse_integer(tokens.next()?)? as u8;
+                    tokens.check_equal(&[";"])?;
+                    if tokens.peek()? == "initial_NAD" {
+                        tokens.check_equal(&["initial_NAD", "="])?;
+                        resp.initial_nad = Some(parse_integer(tokens.next()?)? as u8);
+                        tokens.check_equal(&[";"])?;
+                    }
+                    if protocol.starts_with("\"2.") {
+                        tokens.check_equal(&["product_id", "="])?;
+                        let supplier_id = parse_integer(tokens.next()?)? as u16;
+                        tokens.check_equal(&[","])?;
+                        let function_id = parse_integer(tokens.next()?)? as u16;
+                        let variant;
+                        if tokens.peek()? == "," {
+                            tokens.next()?; // ","
+                            variant = parse_integer(tokens.next()?)? as u8;
+                        } else {
+                            variant = 0;
+                        }
+                        resp.product_id = Some((supplier_id, function_id, variant));
+                        tokens.check_equal(&[";", "response_error", "="])?;
+                        let response_error = tokens.next()?.to_string();
+                        if db.signals.contains_key(&response_error) {
+                            resp.response_error = Some(response_error);
+                        } else {
+                            return Err(Error::UnknownSignal);
+                        }
+                        tokens.check_equal(&[";"])?;
+                        for s in [
+                            "fault_state_signals",
+                            "P2_min",
+                            "ST_min",
+                            "N_As_timeout",
+                            "N_Cr_timeout",
+                        ] {
+                            if tokens.peek()? == s {
+                                warn!("{} not supported yet, ignoring", s); // TODO support?
+                                tokens.check_equal(&[s, "="])?;
+                                while tokens.next()? != ";" {}
+                            }
+                        }
+                        tokens.check_equal(&["configurable_frames", "{"])?;
+                        while tokens.peek()? != "}" {
+                            let frame = tokens.next()?.to_string();
+                            if !db.messages.contains_key(&frame)
+                                && !data.event_frames.contains_key(&frame)
+                            {
+                                return Err(Error::UnknownFrame);
+                            }
+                            let id;
+                            if tokens.peek()? == "=" {
+                                tokens.next()?; // "="
+                                id = Some(parse_integer(tokens.next()?)? as u16);
+                            } else {
+                                id = None;
+                            }
+                            tokens.check_equal(&[";"])?;
+                            resp.configurable_frames.push((frame, id));
+                        }
+                        tokens.next()?; // "}"
+                    }
+                    tokens.next()?; // "}"
+                }
+                tokens.next()?; // "}"
+                state = ParserState::ScheduleTable;
+            }
+            ParserState::ScheduleTable => {
                 state = ParserState::Done; // TODO rest of syntax
             }
             _ => (),
@@ -499,10 +583,10 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
 
     // TODO second pass validation
     /*
-     * - no signal in frame overlap
+     * - no signal in frame overlap and fit in width (make generic db validate function)
+     * - no message id overlap, include event triggered frames (use db validate)
      * - event triggered frames have first byte free
      * - resolver schedule tables exist, no event triggered frames in it!
-     * - no message id overlap, include event triggered frames (make generic db validate function)
      * - no event triggered frames and associated frame in same schedule table
      */
     db.extra = DatabaseType::LDF(data);

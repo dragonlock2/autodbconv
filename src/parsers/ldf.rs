@@ -1,5 +1,6 @@
 use crate::parsers::encoding::{
-    DatabaseType, LDFData, LDFScheduleCommand, Message, Signal, BIT_START_INVALID, MAX_SIGNAL_WIDTH,
+    DatabaseType, Encoding, LDFData, LDFScheduleCommand, Message, Signal, BIT_START_INVALID,
+    MAX_SIGNAL_WIDTH,
 };
 use crate::{Database, Error};
 use log::{error, warn};
@@ -193,6 +194,7 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
     let mut state = ParserState::Header;
     let mut db: Database = Default::default();
     let mut data: LDFData = Default::default();
+    let mut encodings: HashMap<String, Vec<Encoding>> = HashMap::new();
 
     // first pass parse data
     while !matches!(state, ParserState::Done) {
@@ -757,7 +759,70 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
                 }
             }
             ParserState::SignalEncodingTypes => {
-                error!("TODO signal encoding"); // TODO parse
+                tokens.check_equal(&["Signal_encoding_types", "{"])?;
+                while tokens.peek()? != "}" {
+                    let name = tokens.next()?.to_string();
+                    if encodings.contains_key(&name) {
+                        return Err(Error::DuplicateEncoding);
+                    }
+                    encodings.insert(name.clone(), Vec::new());
+                    tokens.check_equal(&["{"])?;
+                    let mut logicals = HashMap::new();
+                    while tokens.peek()? != "}" {
+                        match tokens.next()? {
+                            "logical_value" => {
+                                tokens.check_equal(&[","])?;
+                                let val = parse_integer(tokens.next()?)?;
+                                if tokens.peek()? == "," {
+                                    tokens.next()?; // ","
+                                    logicals.insert(tokens.next()?.to_string(), val);
+                                } else {
+                                    warn!("logical value w/o text, ignoring"); // opinionated take :)
+                                }
+                            }
+                            "physical_value" => {
+                                tokens.check_equal(&[","])?;
+                                let raw_min = parse_integer(tokens.next()?)?;
+                                tokens.check_equal(&[","])?;
+                                let raw_max = parse_integer(tokens.next()?)?;
+                                tokens.check_equal(&[","])?;
+                                let scale = parse_real_or_integer(tokens.next()?)?;
+                                tokens.check_equal(&[","])?;
+                                let offset = parse_real_or_integer(tokens.next()?)?;
+                                let unit;
+                                if tokens.peek()? == "," {
+                                    tokens.next()?; // ","
+                                    unit = tokens.next()?.to_string();
+                                } else {
+                                    unit = "".to_string();
+                                }
+                                encodings.get_mut(&name).unwrap().push(Encoding::Scalar {
+                                    raw_min,
+                                    raw_max,
+                                    scale,
+                                    offset,
+                                    unit,
+                                });
+                            }
+                            "bcd_value" => {
+                                warn!("bcd encoding not supported, ignoring");
+                            }
+                            "ascii_value" => {
+                                warn!("ascii encoding not supported, ignoring");
+                            }
+                            _ => return Err(Error::IncorrectToken),
+                        }
+                        tokens.check_equal(&[";"])?;
+                    }
+                    tokens.next()?; // "}"
+                    if !logicals.is_empty() {
+                        encodings.get_mut(&name).unwrap().push(Encoding::Enum {
+                            name: name,
+                            map: logicals,
+                        });
+                    }
+                }
+                tokens.next()?; // "}"
                 if let Ok(tok) = tokens.peek() {
                     match tok {
                         "Signal_representation" => state = ParserState::SignalRepresentation,

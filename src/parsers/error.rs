@@ -12,6 +12,7 @@ pub enum Error {
     UnknownSignal,
     DuplicateSignal,
     DuplicateFrame,
+    DuplicateEncoding,
     NotUnconditionalFrame,
     SporadicFrameHasResponder,
     EventFrameDifferentLength,

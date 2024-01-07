@@ -767,7 +767,8 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
                     }
                     encodings.insert(name.clone(), Vec::new());
                     tokens.check_equal(&["{"])?;
-                    let mut logicals = HashMap::new();
+                    let mut map = HashMap::new();
+                    let mut rev_map = HashMap::new();
                     while tokens.peek()? != "}" {
                         match tokens.next()? {
                             "logical_value" => {
@@ -775,7 +776,12 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
                                 let val = parse_integer(tokens.next()?)?;
                                 if tokens.peek()? == "," {
                                     tokens.next()?; // ","
-                                    logicals.insert(tokens.next()?.to_string(), val);
+                                    let s = tokens.next()?.to_string();
+                                    map.insert(s.clone(), val); // for encoding, just use last val
+                                    if rev_map.contains_key(&val) {
+                                        return Err(Error::DuplicateEncoding); // for decoding, avoid ambiguity
+                                    }
+                                    rev_map.insert(val, s);
                                 } else {
                                     warn!("logical value w/o text, ignoring"); // opinionated take :)
                                 }
@@ -815,10 +821,11 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
                         tokens.check_equal(&[";"])?;
                     }
                     tokens.next()?; // "}"
-                    if !logicals.is_empty() {
+                    if !map.is_empty() {
                         encodings.get_mut(&name).unwrap().push(Encoding::Enum {
-                            name: name,
-                            map: logicals,
+                            name,
+                            map,
+                            rev_map,
                         });
                     }
                 }

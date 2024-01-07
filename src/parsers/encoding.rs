@@ -14,7 +14,8 @@ pub enum Encoding {
     },
     Enum {
         name: String,
-        map: HashMap<String, u64>,
+        map: HashMap<String, u64>,     // encoding
+        rev_map: HashMap<u64, String>, // decoding
     },
 }
 

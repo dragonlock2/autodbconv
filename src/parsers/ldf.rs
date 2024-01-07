@@ -1,5 +1,5 @@
 use crate::parsers::encoding::{
-    DatabaseType, LDFData, Message, Signal, BIT_START_INVALID, MAX_SIGNAL_WIDTH,
+    DatabaseType, LDFData, LDFScheduleCommand, Message, Signal, BIT_START_INVALID, MAX_SIGNAL_WIDTH,
 };
 use crate::{Database, Error};
 use log::{error, warn};
@@ -162,6 +162,9 @@ enum ParserState {
     DiagnosticFrame,
     NodeAttributes,
     ScheduleTable,
+    SignalGroups,
+    SignalEncodingTypes,
+    SignalRepresentation,
     Done,
 }
 
@@ -575,7 +578,201 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
                 state = ParserState::ScheduleTable;
             }
             ParserState::ScheduleTable => {
-                state = ParserState::Done; // TODO rest of syntax
+                tokens.check_equal(&["Schedule_tables", "{"])?;
+                while tokens.peek()? != "}" {
+                    let name = tokens.next()?.to_string();
+                    let mut table = Vec::new();
+                    tokens.check_equal(&["{"])?;
+                    while tokens.peek()? != "}" {
+                        let cmd = tokens.next()?.to_string();
+                        let command;
+                        match cmd.as_str() {
+                            "MasterReq" => command = LDFScheduleCommand::CommanderReq,
+                            "SlaveResp" => command = LDFScheduleCommand::ResponderResp,
+                            "AssignNAD" => {
+                                tokens.check_equal(&["{"])?;
+                                let node = tokens.next()?.to_string();
+                                if !data.responders.contains_key(&node) {
+                                    return Err(Error::UnknownNode);
+                                }
+                                tokens.check_equal(&["}"])?;
+                                command = LDFScheduleCommand::AssignNAD(node);
+                            }
+                            "ConditionalChangeNAD" => {
+                                tokens.check_equal(&["{"])?;
+                                let mut fields = [0; 6];
+                                for i in 0..fields.len() {
+                                    fields[i] = parse_integer(tokens.next()?)? as u8;
+                                    if i != fields.len() - 1 {
+                                        tokens.check_equal(&[","])?;
+                                    } else {
+                                        tokens.check_equal(&["}"])?;
+                                    }
+                                }
+                                command = LDFScheduleCommand::ConditionalChangeNAD {
+                                    nad: fields[0],
+                                    id: fields[1],
+                                    byte: fields[2],
+                                    mask: fields[3],
+                                    inv: fields[4],
+                                    new_nad: fields[5],
+                                };
+                            }
+                            "DataDump" => {
+                                tokens.check_equal(&["{"])?;
+                                let node = tokens.next()?.to_string();
+                                if !data.responders.contains_key(&node) {
+                                    return Err(Error::UnknownNode);
+                                }
+                                tokens.check_equal(&[","])?;
+                                let mut d = [0; 5];
+                                for i in 0..d.len() {
+                                    d[i] = parse_integer(tokens.next()?)? as u8;
+                                    if i != d.len() - 1 {
+                                        tokens.check_equal(&[","])?;
+                                    } else {
+                                        tokens.check_equal(&["}"])?;
+                                    }
+                                }
+                                command = LDFScheduleCommand::DataDump {
+                                    name: node,
+                                    data: d,
+                                };
+                            }
+                            "SaveConfiguration" => {
+                                tokens.check_equal(&["{"])?;
+                                let node = tokens.next()?.to_string();
+                                if !data.responders.contains_key(&node) {
+                                    return Err(Error::UnknownNode);
+                                }
+                                tokens.check_equal(&["}"])?;
+                                command = LDFScheduleCommand::SaveConfiguration(node);
+                            }
+                            "AssignFrameIdRange" => {
+                                tokens.check_equal(&["{"])?;
+                                let node = tokens.next()?.to_string();
+                                if !data.responders.contains_key(&node) {
+                                    return Err(Error::UnknownNode);
+                                }
+                                tokens.check_equal(&[","])?;
+                                let index = parse_integer(tokens.next()?)? as u8;
+                                let mut pid = [0; 4];
+                                if tokens.peek()? == "," {
+                                    tokens.next()?; // ","
+                                    for i in 0..pid.len() {
+                                        pid[i] = parse_integer(tokens.next()?)? as u8;
+                                        if i != pid.len() - 1 {
+                                            tokens.check_equal(&[","])?;
+                                        } else {
+                                            tokens.check_equal(&["}"])?;
+                                        }
+                                    }
+                                } else {
+                                    warn!("getting PID from configurable_frames not supported yet, default to 0xFF"); // TODO support?
+                                    pid = [0xFF, 0xFF, 0xFF, 0xFF];
+                                    tokens.check_equal(&["}"])?;
+                                }
+                                command = LDFScheduleCommand::AssignFrameIdRange {
+                                    name: node,
+                                    index,
+                                    pid,
+                                };
+                            }
+                            "FreeFormat" => {
+                                tokens.check_equal(&["{"])?;
+                                let mut d = [0; 8];
+                                for i in 0..d.len() {
+                                    d[i] = parse_integer(tokens.next()?)? as u8;
+                                    if i != d.len() - 1 {
+                                        tokens.check_equal(&[","])?;
+                                    } else {
+                                        tokens.check_equal(&["}"])?;
+                                    }
+                                }
+                                command = LDFScheduleCommand::FreeFormat(d);
+                            }
+                            "AssignFrameId" => {
+                                tokens.check_equal(&["{"])?;
+                                let node = tokens.next()?.to_string();
+                                if !data.responders.contains_key(&node) {
+                                    return Err(Error::UnknownNode);
+                                }
+                                tokens.check_equal(&[","])?;
+                                let frame = tokens.next()?.to_string();
+                                if !db.messages.contains_key(&frame) {
+                                    return Err(Error::UnknownFrame);
+                                }
+                                tokens.check_equal(&["}"])?;
+                                command = LDFScheduleCommand::AssignFrameId { node, frame };
+                            }
+                            _ => {
+                                if !db.messages.contains_key(&cmd)
+                                    && !data.sporadic_frames.contains_key(&cmd)
+                                    && !data.event_frames.contains_key(&cmd)
+                                {
+                                    return Err(Error::UnknownFrame);
+                                }
+                                command = LDFScheduleCommand::Frame(cmd);
+                            }
+                        }
+                        tokens.check_equal(&["delay"])?;
+                        let frame_time = parse_real_or_integer(tokens.next()?)?;
+                        tokens.check_equal(&["ms", ";"])?;
+                        table.push((command, frame_time));
+                    }
+                    tokens.next()?; // "}"
+                    data.schedule_tables.insert(name, table);
+                }
+                tokens.next()?; // "}"
+                if let Ok(tok) = tokens.peek() {
+                    match tok {
+                        "Signal_groups" => state = ParserState::SignalGroups,
+                        "Signal_encoding_types" => state = ParserState::SignalEncodingTypes,
+                        "Signal_representation" => state = ParserState::SignalRepresentation,
+                        _ => return Err(Error::UnexpectedToken),
+                    }
+                } else {
+                    state = ParserState::Done;
+                }
+            }
+            ParserState::SignalGroups => {
+                warn!("signal groups deprecated, ignoring section");
+                tokens.check_equal(&["Signal_groups", "{"])?;
+                let mut depth = 1;
+                while depth > 0 {
+                    match tokens.next()? {
+                        "{" => depth += 1,
+                        "}" => depth -= 1,
+                        _ => (),
+                    }
+                }
+                if let Ok(tok) = tokens.peek() {
+                    match tok {
+                        "Signal_encoding_types" => state = ParserState::SignalEncodingTypes,
+                        "Signal_representation" => state = ParserState::SignalRepresentation,
+                        _ => return Err(Error::UnexpectedToken),
+                    }
+                } else {
+                    state = ParserState::Done;
+                }
+            }
+            ParserState::SignalEncodingTypes => {
+                error!("TODO signal encoding"); // TODO parse
+                if let Ok(tok) = tokens.peek() {
+                    match tok {
+                        "Signal_representation" => state = ParserState::SignalRepresentation,
+                        _ => return Err(Error::UnexpectedToken),
+                    }
+                } else {
+                    state = ParserState::Done;
+                }
+            }
+            ParserState::SignalRepresentation => {
+                error!("TODO signal representation"); // TODO parse
+                if tokens.peek().is_ok() {
+                    return Err(Error::UnexpectedToken);
+                }
+                state = ParserState::Done;
             }
             _ => (),
         }

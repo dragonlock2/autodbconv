@@ -55,6 +55,37 @@ pub struct LINResponderData {
     pub configurable_frames: Vec<(String, Option<u16>)>,
 }
 
+#[derive(Debug)]
+pub enum LDFScheduleCommand {
+    Frame(String),
+    CommanderReq,
+    ResponderResp,
+    AssignNAD(String),
+    ConditionalChangeNAD {
+        nad: u8,
+        id: u8,
+        byte: u8,
+        mask: u8,
+        inv: u8,
+        new_nad: u8,
+    },
+    DataDump {
+        name: String,
+        data: [u8; 5], // D1-D5
+    },
+    SaveConfiguration(String),
+    AssignFrameIdRange {
+        name: String,
+        index: u8,
+        pid: [u8; 4],
+    },
+    FreeFormat([u8; 8]),
+    AssignFrameId {
+        node: String,
+        frame: String,
+    },
+}
+
 #[derive(Debug, Default)]
 pub struct LDFData {
     pub bitrate: f64, // bps
@@ -65,7 +96,7 @@ pub struct LDFData {
     pub responders: HashMap<String, LINResponderData>,
     pub sporadic_frames: HashMap<String, Vec<String>>,
     pub event_frames: HashMap<String, (String, u32, Vec<String>)>, // collision resolver, id, list of frames
-                                                                   // TODO schedule tables
+    pub schedule_tables: HashMap<String, Vec<(LDFScheduleCommand, f64)>>, // command, delay in ms
 }
 
 #[derive(Debug)]

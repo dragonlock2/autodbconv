@@ -3,6 +3,7 @@ pub enum Error {
     IO(String),
     ExpectedComment,
     ExpectedToken,
+    UnexpectedToken,
     IncorrectToken,
     NumberParse,
     SignalTooWide,

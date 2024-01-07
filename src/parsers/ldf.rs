@@ -1,6 +1,7 @@
-use crate::parsers::encoding::{DatabaseType, LDFData, Signal};
+use crate::parsers::encoding::{DatabaseType, LDFData, Message, Signal, BIT_START_INVALID};
 use crate::{Database, Error};
 use log::{error, warn};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -154,6 +155,10 @@ enum ParserState {
     Signal,
     DiagnosticSignal,
     Frame,
+    SporadicFrame,
+    EventTriggeredFrame,
+    DiagnosticFrame,
+    NodeAttributes,
     Done,
 }
 
@@ -183,6 +188,7 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
     let mut db: Database = Default::default();
     let mut data: LDFData = Default::default();
 
+    // first pass parse data
     while !matches!(state, ParserState::Done) {
         match state {
             ParserState::Header => {
@@ -293,7 +299,7 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
                         Signal {
                             signed: false,
                             little_endian: true,
-                            bit_start: 0, // set later
+                            bit_start: BIT_START_INVALID, // set later
                             bit_width,
                             init_value,
                             encodings: Vec::new(),
@@ -332,11 +338,173 @@ pub fn parse_ldf(ldf: impl AsRef<Path>) -> Result<Database, Error> {
                 state = ParserState::Frame;
             }
             ParserState::Frame => {
+                tokens.check_equal(&["Frames", "{"])?;
+                while tokens.peek()? != "}" {
+                    let name = tokens.next()?.to_string();
+                    tokens.check_equal(&[":"])?;
+                    let id = parse_integer(tokens.next()?)? as u32;
+                    tokens.check_equal(&[","])?;
+                    let sender = tokens.next()?.to_string();
+                    tokens.check_equal(&[","])?;
+                    let byte_width = parse_integer(tokens.next()?)? as u16;
+                    tokens.check_equal(&["{"])?;
+                    let mut signals = Vec::new();
+                    while tokens.peek()? != "}" {
+                        let signal_name = tokens.next()?.to_string();
+                        tokens.check_equal(&[","])?;
+                        let signal_offset = parse_integer(tokens.next()?)? as u16;
+                        tokens.check_equal(&[";"])?;
+                        if db.signals.contains_key(&signal_name) {
+                            if db.signals[&signal_name].bit_start == BIT_START_INVALID {
+                                db.signals.get_mut(&signal_name).unwrap().bit_start = signal_offset;
+                            } else {
+                                return Err(Error::DuplicateSignal);
+                            }
+                        } else {
+                            return Err(Error::UnknownSignal);
+                        }
+                        signals.push(signal_name);
+                    }
+                    tokens.next()?; // "}"
+                    db.messages.insert(
+                        name,
+                        Message {
+                            sender,
+                            id,
+                            byte_width,
+                            signals,
+                            mux_signals: HashMap::new(), // none
+                        },
+                    );
+                }
+                tokens.next()?; // "}"
+                match tokens.peek()? {
+                    "Sporadic_frames" => state = ParserState::SporadicFrame,
+                    "Event_triggered_frames" => state = ParserState::EventTriggeredFrame,
+                    "Diagnostic_frames" => state = ParserState::DiagnosticFrame,
+                    _ => state = ParserState::NodeAttributes,
+                }
+            }
+            ParserState::SporadicFrame => {
+                tokens.check_equal(&["Sporadic_frames", "{"])?;
+                while tokens.peek()? != "}" {
+                    let name = tokens.next()?.to_string();
+                    tokens.check_equal(&[":"])?;
+                    let mut frames = vec![tokens.next()?.to_string()]; // at least one frame
+                    while tokens.peek()? != ";" {
+                        tokens.check_equal(&[","])?;
+                        let f = tokens.next()?.to_string();
+                        if !db.messages.contains_key(&f) {
+                            return Err(Error::SporadicUnknownFrame);
+                        } else if db.messages[&f].sender != data.commander {
+                            return Err(Error::SporadicFrameHasResponder);
+                        } else if frames.contains(&f) {
+                            return Err(Error::DuplicateFrame);
+                        }
+                        frames.push(f);
+                    }
+                    tokens.next()?; // ";"
+                    if db.messages.contains_key(&name) || data.sporadic_frames.contains_key(&name) {
+                        return Err(Error::DuplicateFrame);
+                    } else {
+                        data.sporadic_frames.insert(name, frames);
+                    }
+                }
+                tokens.next()?; // "}"
+                match tokens.peek()? {
+                    "Event_triggered_frames" => state = ParserState::EventTriggeredFrame,
+                    "Diagnostic_frames" => state = ParserState::DiagnosticFrame,
+                    _ => state = ParserState::NodeAttributes,
+                }
+            }
+            ParserState::EventTriggeredFrame => {
+                tokens.check_equal(&["Event_triggered_frames", "{"])?;
+                while tokens.peek()? != "}" {
+                    let name = tokens.next()?.to_string();
+                    tokens.check_equal(&[":"])?;
+                    let resolver = tokens.next()?.to_string();
+                    tokens.check_equal(&[","])?;
+                    let id = parse_integer(tokens.next()?)? as u32;
+                    let mut frames = Vec::new();
+                    while tokens.peek()? != ";" {
+                        tokens.check_equal(&[","])?;
+                        let f = tokens.next()?.to_string();
+                        if frames.contains(&f) {
+                            return Err(Error::DuplicateFrame);
+                        } else if db.messages.contains_key(&f) {
+                            frames.push(f);
+                        } else {
+                            return Err(Error::NotUnconditionalFrame);
+                        }
+                    }
+                    tokens.next()?; // ";"
+                    let all_same_len;
+                    if frames.is_empty() {
+                        all_same_len = true;
+                    } else {
+                        let first = db.messages[&frames[0]].byte_width;
+                        all_same_len = frames.iter().all(|f| db.messages[f].byte_width == first);
+                    }
+                    if db.messages.contains_key(&name)
+                        || data.sporadic_frames.contains_key(&name)
+                        || data.event_frames.contains_key(&name)
+                    {
+                        return Err(Error::DuplicateFrame);
+                    } else if all_same_len {
+                        data.event_frames.insert(name, (resolver, id, frames));
+                    } else {
+                        return Err(Error::EventFrameDifferentLength);
+                    }
+                }
+                tokens.next()?; // "}"
+                match tokens.peek()? {
+                    "Diagnostic_frames" => state = ParserState::DiagnosticFrame,
+                    _ => state = ParserState::NodeAttributes,
+                }
+            }
+            ParserState::DiagnosticFrame => {
+                #[rustfmt::skip]
+                tokens.check_equal(&[
+                    "Diagnostic_frames", "{",
+                        "MasterReq", ":", "60", "{",
+                            "MasterReqB0", ",", "0", ";",
+                            "MasterReqB1", ",", "8", ";",
+                            "MasterReqB2", ",", "16", ";",
+                            "MasterReqB3", ",", "24", ";",
+                            "MasterReqB4", ",", "32", ";",
+                            "MasterReqB5", ",", "40", ";",
+                            "MasterReqB6", ",", "48", ";",
+                            "MasterReqB7", ",", "56", ";",
+                        "}",
+                        "SlaveResp", ":", "61", "{",
+                            "SlaveRespB0", ",", "0", ";",
+                            "SlaveRespB1", ",", "8", ";",
+                            "SlaveRespB2", ",", "16", ";",
+                            "SlaveRespB3", ",", "24", ";",
+                            "SlaveRespB4", ",", "32", ";",
+                            "SlaveRespB5", ",", "40", ";",
+                            "SlaveRespB6", ",", "48", ";",
+                            "SlaveRespB7", ",", "56", ";",
+                        "}",
+                    "}"
+                ])?;
+                state = ParserState::NodeAttributes;
+            }
+            ParserState::NodeAttributes => {
                 state = ParserState::Done; // TODO rest of syntax
             }
             _ => (),
         }
     }
+
+    // TODO second pass validation
+    /*
+     * - no signal in frame overlap
+     * - event triggered frames have first byte free
+     * - resolver schedule tables exist, no event triggered frames in it!
+     * - no message id overlap, include event triggered frames (make generic db validate function)
+     * - no event triggered frames and associated frame in same schedule table
+     */
     db.extra = DatabaseType::LDF(data);
     Ok(db)
 }

@@ -6,6 +6,13 @@ pub enum Error {
     IncorrectToken,
     NumberParse,
     UnknownNode,
+    UnknownSignal,
+    DuplicateSignal,
+    DuplicateFrame,
+    NotUnconditionalFrame,
+    SporadicUnknownFrame,
+    SporadicFrameHasResponder,
+    EventFrameDifferentLength,
     NotImplemented,
 }
 

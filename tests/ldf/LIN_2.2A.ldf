@@ -27,7 +27,7 @@ Frames {
         InternalLightsRequest, 0;
     }
     LSM_Frm1: 0x02, LSM, 2 {
-       LeftIntLightsSwitch, 8;
+        LeftIntLightsSwitch, 8;
     }
     LSM_Frm2: 0x03, LSM, 1 {
         LSMerror, 0;

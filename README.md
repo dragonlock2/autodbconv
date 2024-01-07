@@ -11,3 +11,4 @@ Easy to use Rust library for parsing and generating code from automotive databas
 - generator for Python
 - generator for Zephyr C++
 - tool for combining NCF and LDF
+- publish to cargo

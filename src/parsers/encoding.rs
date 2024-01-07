@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-const MAX_SIGNAL_WIDTH: u16 = 64;
+pub const MAX_SIGNAL_WIDTH: u16 = 64;
+pub const BIT_START_INVALID: u16 = u16::MAX;
 
 #[derive(Debug)]
 pub enum Encoding {
@@ -17,7 +18,7 @@ pub enum Encoding {
     },
 }
 
-/**
+/*
  * Allocation with mixed endian can get confusing. Here's an example mask for an 8-bit signal across 2 bytes.
  *  little - bit_start=4, bit_width=8, F0 0F
  *  big    - bit_start=3, bit_width=8, 0F F0
@@ -36,12 +37,12 @@ pub struct Signal {
 }
 
 #[derive(Debug)]
-struct Message {
-    sender: String,
-    id: u32,
-    byte_width: u16,
-    signals: Vec<String>,
-    mux_signals: HashMap<String, (u64, Vec<String>)>,
+pub struct Message {
+    pub sender: String,
+    pub id: u32,
+    pub byte_width: u16,
+    pub signals: Vec<String>,
+    pub mux_signals: HashMap<String, (u64, Vec<String>)>,
 }
 
 #[derive(Debug, Default)]
@@ -49,11 +50,13 @@ pub struct LDFData {
     pub bitrate: f64, // bps
     pub postfix: String,
     pub commander: String,
-    pub responders: HashMap<String, Vec<String>>, // node => subscribed signals
     pub time_base: f64,                           // ms
     pub jitter: f64,                              // ms
-                                                  // TODO schedule tables
-                                                  // TODO NADs?
+    pub responders: HashMap<String, Vec<String>>, // node => subscribed signals
+    pub sporadic_frames: HashMap<String, Vec<String>>,
+    pub event_frames: HashMap<String, (String, u32, Vec<String>)>, // collision resolver, id, list of frames
+                                                                   // TODO schedule tables
+                                                                   // TODO NADs?
 }
 
 #[derive(Debug)]
@@ -66,7 +69,7 @@ pub enum DatabaseType {
 #[derive(Debug, Default)]
 pub struct Database {
     pub signals: HashMap<String, Signal>,
-    messages: HashMap<String, Message>,
+    pub messages: HashMap<String, Message>,
     pub extra: DatabaseType,
 }
 
